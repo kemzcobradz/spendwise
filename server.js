@@ -9,7 +9,7 @@ const fs    = require('fs');
 const path  = require('path');
 const os    = require('os');
 
-const PORT      = 3000;
+const PORT      = process.env.PORT || 3100;
 const HTML_FILE = path.join(__dirname, 'expense-tracker.html');
 const DATA_FILE = path.join(__dirname, 'spendwise-data.json');
 
@@ -114,7 +114,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
     try {
       const html = fs.readFileSync(HTML_FILE, 'utf8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type':  'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma':        'no-cache',
+        'Expires':       '0'
+      });
       res.end(html);
     } catch {
       res.writeHead(500, { 'Content-Type': 'text/plain' });

@@ -159,6 +159,18 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
 /* CHAT */
 .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 400px; }
+.chat-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.session-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; overflow: hidden; }
+.session-panel-header { padding: 10px 14px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+.session-list { max-height: 180px; overflow-y: auto; }
+.session-item { display: flex; align-items: center; padding: 9px 14px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border); gap: 8px; }
+.session-item:last-child { border-bottom: none; }
+.session-item:hover { background: var(--bg); }
+.session-item.active { background: #e0e7ff; }
+.session-item .si-name { flex: 1; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-item .si-date { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.session-item .si-del { color: var(--danger); font-size: 12px; opacity: 0; flex-shrink: 0; background: none; border: none; cursor: pointer; padding: 0 2px; }
+.session-item:hover .si-del { opacity: 1; }
 .chat-msgs {
   flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   padding: 16px; background: var(--surface); border: 1px solid var(--border);
@@ -167,8 +179,13 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .msg { max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
 .msg.user { align-self: flex-end; background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
 .msg.assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg img { max-width: 180px; border-radius: 8px; display: block; margin-bottom: 4px; }
+.img-preview-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.img-preview-row img { height: 56px; border-radius: 6px; border: 1px solid var(--border); }
 .chat-input-row { display: flex; gap: 8px; }
 .chat-input-row input { flex: 1; }
+.img-btn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); transition: all 0.15s; }
+.img-btn:hover { background: var(--bg); border-color: var(--primary); }
 
 /* EMPTY STATE */
 .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
@@ -203,6 +220,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   <button class="nav-btn"        id="nb-transactions"  onclick="goTo('transactions')">Transactions</button>
   <button class="nav-btn"        id="nb-products"      onclick="goTo('products')">Products</button>
   <button class="nav-btn"        id="nb-budget"        onclick="goTo('budget')">Budget</button>
+  <button class="nav-btn"        id="nb-history"       onclick="goTo('history')">History</button>
   <button class="nav-btn"        id="nb-chat"          onclick="goTo('chat')">Chat</button>
   <button class="nav-btn"        id="nb-settings"      onclick="goTo('settings')">Settings</button>
   <span id="server-status" style="margin-left:auto;font-size:12px;font-weight:500;white-space:nowrap;padding:0 8px"></span>
@@ -212,6 +230,14 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
 <!-- ── DASHBOARD ── -->
 <div id="page-dashboard" class="page active">
+  <div class="sec-header" style="margin-bottom:12px">
+    <h2 id="dash-month-label" style="font-size:16px;font-weight:600"></h2>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="shiftDashMonth(-1)">&#8592;</button>
+      <button class="btn btn-ghost btn-sm" onclick="shiftDashMonth(0)" id="dash-today-btn">Today</button>
+      <button class="btn btn-ghost btn-sm" onclick="shiftDashMonth(1)" id="dash-next-btn">&#8594;</button>
+    </div>
+  </div>
   <div class="summary-grid" id="dash-cards"></div>
   <div class="two-col">
     <div class="card">
@@ -232,7 +258,13 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 <div id="page-transactions" class="page">
   <div class="sec-header">
     <h2>Transactions</h2>
-    <button class="btn btn-primary" onclick="openTxModal()">+ Add</button>
+    <div style="display:flex;gap:8px">
+      <label class="btn btn-ghost" style="cursor:pointer" title="Scan a receipt with AI">
+        📷 Scan Receipt
+        <input type="file" accept="image/*" style="display:none" onchange="scanReceipt(this)">
+      </label>
+      <button class="btn btn-primary" onclick="openTxModal()">+ Add</button>
+    </div>
   </div>
   <div class="filters">
     <select id="f-type" onchange="renderTxList()">
@@ -266,19 +298,47 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   <div id="budget-view"></div>
 </div>
 
+<!-- ── HISTORY ── -->
+<div id="page-history" class="page">
+  <div class="sec-header">
+    <h2>Monthly History</h2>
+    <div style="display:flex;align-items:center;gap:8px">
+      <select id="hist-year" onchange="renderHistory()" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px"></select>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:16px">
+    <table id="hist-table" style="width:100%;border-collapse:collapse;font-size:14px"></table>
+  </div>
+  <div class="card">
+    <div class="sec-header" style="margin-bottom:12px"><h2>Income vs Expenses</h2></div>
+    <canvas id="hist-chart" height="180"></canvas>
+  </div>
+</div>
+
 <!-- ── CHAT ── -->
 <div id="page-chat" class="page">
   <div class="chat-wrap">
-    <div class="chat-msgs" id="chat-msgs">
-      <div class="msg assistant">Hi! I'm your SpendWise assistant. I can see all your data and take actions for you. Try:
-• "I spent ₱500 on groceries"
-• "Change my last grocery entry to ₱650"
-• "Delete the transport entry from yesterday"
-• "Search Lazada for Palmolive shampoo"
-• "How's my budget this month?"</div>
+    <div class="chat-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <strong style="font-size:15px">Chat</strong>
+        <button class="btn btn-ghost btn-sm" onclick="toggleSessionPanel()" id="sessions-toggle">Sessions</button>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="newSession()">+ New Chat</button>
+    </div>
+    <div id="session-panel" class="session-panel" style="display:none">
+      <div class="session-panel-header">Saved Sessions</div>
+      <div class="session-list" id="session-list"></div>
+    </div>
+    <div class="chat-msgs" id="chat-msgs"></div>
+    <div class="img-preview-row" id="img-preview-row" style="display:none">
+      <img id="img-preview" src="" alt="preview">
+      <button class="btn btn-danger btn-sm" onclick="clearImg()">Remove</button>
     </div>
     <div class="chat-input-row">
-      <input type="text" id="chat-in" placeholder="e.g. 'Search Lazada for rice' or 'Edit my grocery entry to ₱600'" onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); sendMsg(); }">
+      <label class="img-btn" title="Attach image" style="display:flex;align-items:center">
+        📷<input type="file" id="chat-img-input" accept="image/*" style="display:none" onchange="handleImgSelect(this)">
+      </label>
+      <input type="text" id="chat-in" placeholder="Ask anything, attach a receipt photo, or say 'Search Lazada for...'" onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); sendMsg(); }">
       <button class="btn btn-primary" id="chat-send" onclick="sendMsg()">Send</button>
     </div>
   </div>
@@ -307,6 +367,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
           <option value="nex-agi/nex-n2-pro:free">Nex AGI N2 Pro (free)</option>
           <option value="cohere/north-mini-code:free">Cohere North Mini Code (free)</option>
         </optgroup>
+        <optgroup label="📷 Vision Models (image analysis)">
+          <option value="meta-llama/llama-3.2-11b-vision-instruct:free">Llama 3.2 11B Vision (free) — for image uploads</option>
+          <option value="qwen/qwen-2-vl-7b-instruct:free">Qwen 2 VL 7B Vision (free)</option>
+        </optgroup>
         <optgroup label="💡 Paste any ':free' model ID below">
           <option value="custom">— enter custom model ID in field below —</option>
         </optgroup>
@@ -321,6 +385,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
       <input type="text" id="s-currency" maxlength="3" style="max-width:80px">
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+    <hr>
+    <p style="font-size:13px;font-weight:600;margin-bottom:12px;">Backup &amp; Restore</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <button class="btn btn-ghost" onclick="exportCSV()">⬇ Download CSV</button>
+      <button class="btn btn-ghost" onclick="exportJSON()">⬇ Download JSON</button>
+      <label class="btn btn-ghost" style="cursor:pointer" title="Load data from a previously downloaded JSON backup">
+        ⬆ Import JSON
+        <input type="file" accept="application/json,.json" style="display:none" onchange="importData(this)">
+      </label>
+      <button class="btn btn-ghost" onclick="openInSheets()" title="Opens Google Sheets and prompts you to import your CSV">📊 Open in Google Sheets</button>
+    </div>
     <hr>
     <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Danger Zone</p>
     <button class="btn btn-danger" onclick="nukeData()">Clear All Data</button>
@@ -446,20 +521,21 @@ const IS_SERVER = window.location.protocol !== 'file:';
 // IN-MEMORY STATE
 // ─────────────────────────────────────────────
 const SETTINGS_DEFAULT = {
-  omkarKey: DEFAULT_OMKAR_KEY,
-  orKey:    DEFAULT_OR_KEY,
-  model:    'nvidia/nemotron-3-ultra-550b-a55b:free',
-  currency: '₱'
+  omkarKey:      DEFAULT_OMKAR_KEY,
+  openrouterKey: DEFAULT_OR_KEY,
+  model:         'nvidia/nemotron-3-ultra-550b-a55b:free',
+  currency:      '₱'
 };
-let appData = { txs: [], products: [], budget: null, settings: { ...SETTINGS_DEFAULT } };
+let appData = { txs: [], products: [], budget: null, settings: { ...SETTINGS_DEFAULT }, sessions: [] };
 let syncTimer = null;
 
 function getTxs()      { return appData.txs; }
 function getProds()    { return appData.products; }
 function getBudget()   { return appData.budget; }
 function getSettings() { return appData.settings; }
+function getSessions() { return appData.sessions || []; }
 
-const KEY_MAP = { sw_txs: 'txs', sw_prods: 'products', sw_budget: 'budget', sw_settings: 'settings' };
+const KEY_MAP = { sw_txs: 'txs', sw_prods: 'products', sw_budget: 'budget', sw_settings: 'settings', sw_sessions: 'sessions' };
 
 function save(key, value) {
   const k = KEY_MAP[key];
@@ -488,6 +564,7 @@ async function pullFromServer() {
     appData.products = d.products || [];
     appData.budget   = d.budget   ?? null;
     appData.settings = { ...SETTINGS_DEFAULT, ...(d.settings || {}) };
+    appData.sessions = d.sessions || [];
     setStatus(true);
     return true;
   } catch { setStatus(false); return false; }
@@ -514,10 +591,11 @@ async function initData() {
       }
     }, 30_000);
   } else {
-    try { appData.txs      = JSON.parse(localStorage.getItem('sw_txs')     || '[]');   } catch {}
+    try { appData.txs      = JSON.parse(localStorage.getItem('sw_txs')      || '[]');   } catch {}
     try { appData.products = JSON.parse(localStorage.getItem('sw_prods')   || '[]');   } catch {}
     try { appData.budget   = JSON.parse(localStorage.getItem('sw_budget')  || 'null'); } catch {}
     try { appData.settings = { ...SETTINGS_DEFAULT, ...JSON.parse(localStorage.getItem('sw_settings') || '{}') }; } catch {}
+    try { appData.sessions = JSON.parse(localStorage.getItem('sw_sessions') || '[]');  } catch {}
   }
 }
 
@@ -527,6 +605,8 @@ async function initData() {
 function uid()       { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function today()     { return new Date().toISOString().slice(0, 10); }
 function thisMonth() { return new Date().toISOString().slice(0, 7); }
+function esc(s)      { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function persist()   { if (IS_SERVER) { clearTimeout(syncTimer); syncTimer = setTimeout(pushToServer, 400); } else { Object.entries(KEY_MAP).forEach(([k,v]) => { localStorage.setItem(k, JSON.stringify(appData[v])); }); } }
 function fmt(n) {
   const s = getSettings();
   return s.currency + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -544,6 +624,7 @@ function goTo(name) {
   if (name === 'transactions') renderTxList();
   if (name === 'products')     renderProds();
   if (name === 'budget')       renderBudget();
+  if (name === 'history')      renderHistory();
   if (name === 'settings')     loadSettings();
 }
 
@@ -576,11 +657,29 @@ function refreshCatOptions() {
 // ─────────────────────────────────────────────
 // DASHBOARD
 // ─────────────────────────────────────────────
-let catChartInst = null;
+let catChartInst  = null;
+let histChartInst = null;
+let selectedDashMonth = thisMonth();
+
+function shiftDashMonth(dir) {
+  if (dir === 0) { selectedDashMonth = thisMonth(); }
+  else {
+    const [y, mo] = selectedDashMonth.split('-').map(Number);
+    const d = new Date(y, mo - 1 + dir, 1);
+    selectedDashMonth = d.toISOString().slice(0, 7);
+  }
+  renderDashboard();
+}
 
 function renderDashboard() {
   const txs = getTxs();
-  const m   = thisMonth();
+  const m   = selectedDashMonth;
+  const [y, mo] = m.split('-').map(Number);
+  const label = new Date(y, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+  document.getElementById('dash-month-label').textContent = label;
+  const isCurrentMonth = m === thisMonth();
+  const nextBtn = document.getElementById('dash-next-btn');
+  if (nextBtn) nextBtn.disabled = isCurrentMonth;
   const mTx = txs.filter(t => t.date.startsWith(m));
   const totalInc = mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const totalExp = mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
@@ -588,8 +687,8 @@ function renderDashboard() {
   const budget   = getBudget();
 
   let cards = `
-    <div class="card summary-card"><div class="s-label">Income (this month)</div><div class="s-value s-income">${fmt(totalInc)}</div></div>
-    <div class="card summary-card"><div class="s-label">Expenses (this month)</div><div class="s-value s-expense">${fmt(totalExp)}</div></div>
+    <div class="card summary-card"><div class="s-label">Income</div><div class="s-value s-income">${fmt(totalInc)}</div></div>
+    <div class="card summary-card"><div class="s-label">Expenses</div><div class="s-value s-expense">${fmt(totalExp)}</div></div>
     <div class="card summary-card"><div class="s-label">Net Balance</div><div class="s-value s-net">${fmt(net)}</div></div>
   `;
   if (budget) {
@@ -623,6 +722,101 @@ function renderDashboard() {
 }
 
 // ─────────────────────────────────────────────
+// HISTORY
+// ─────────────────────────────────────────────
+function renderHistory() {
+  const txs  = getTxs();
+  const years = [...new Set(txs.map(t => t.date.slice(0, 4)))].sort((a, b) => b - a);
+  const curY  = new Date().getFullYear().toString();
+  if (!years.length) years.push(curY);
+
+  // Populate year selector
+  const sel = document.getElementById('hist-year');
+  const prev = sel.value;
+  sel.innerHTML = years.map(y => `<option value="${y}" ${y === (prev || curY) ? 'selected' : ''}>${y}</option>`).join('');
+  const year = sel.value || curY;
+
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let totInc = 0, totExp = 0, totTx = 0;
+  const incData = [], expData = [], labels = [];
+
+  let rows = '';
+  for (let mo = 1; mo <= 12; mo++) {
+    const key = `${year}-${String(mo).padStart(2,'0')}`;
+    const mTx = txs.filter(t => t.date.startsWith(key));
+    const inc = mTx.filter(t => t.type === 'income').reduce((s,t) => s + t.amount, 0);
+    const exp = mTx.filter(t => t.type === 'expense').reduce((s,t) => s + t.amount, 0);
+    const net = inc - exp;
+    totInc += inc; totExp += exp; totTx += mTx.length;
+    labels.push(MONTHS[mo - 1]);
+    incData.push(inc); expData.push(exp);
+    const netCol = net >= 0 ? 'var(--success)' : 'var(--danger)';
+    const emptyRow = !mTx.length;
+    rows += `<tr class="hist-row" onclick="jumpToMonth('${key}')" style="cursor:pointer;opacity:${emptyRow ? 0.4 : 1}">
+      <td style="padding:10px 8px;font-weight:500">${MONTHS[mo-1]}</td>
+      <td style="padding:10px 8px;color:var(--success);text-align:right">${inc ? fmt(inc) : '—'}</td>
+      <td style="padding:10px 8px;color:var(--danger);text-align:right">${exp ? fmt(exp) : '—'}</td>
+      <td style="padding:10px 8px;color:${netCol};text-align:right;font-weight:600">${mTx.length ? fmt(net) : '—'}</td>
+      <td style="padding:10px 8px;text-align:right;color:var(--muted)">${mTx.length || '—'}</td>
+    </tr>`;
+  }
+  const totNet = totInc - totExp;
+  const totCol = totNet >= 0 ? 'var(--success)' : 'var(--danger)';
+
+  document.getElementById('hist-table').innerHTML = `
+    <thead>
+      <tr style="border-bottom:2px solid var(--border);font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+        <th style="padding:8px;text-align:left">Month</th>
+        <th style="padding:8px;text-align:right">Income</th>
+        <th style="padding:8px;text-align:right">Expenses</th>
+        <th style="padding:8px;text-align:right">Net</th>
+        <th style="padding:8px;text-align:right">Txns</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr style="border-top:2px solid var(--border);font-weight:700">
+        <td style="padding:10px 8px">Total ${year}</td>
+        <td style="padding:10px 8px;color:var(--success);text-align:right">${fmt(totInc)}</td>
+        <td style="padding:10px 8px;color:var(--danger);text-align:right">${fmt(totExp)}</td>
+        <td style="padding:10px 8px;color:${totCol};text-align:right">${fmt(totNet)}</td>
+        <td style="padding:10px 8px;text-align:right;color:var(--muted)">${totTx}</td>
+      </tr>
+    </tfoot>`;
+
+  // Bar chart
+  if (histChartInst) { histChartInst.destroy(); histChartInst = null; }
+  const ctx = document.getElementById('hist-chart').getContext('2d');
+  histChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Income',   data: incData, backgroundColor: 'rgba(16,185,129,0.7)', borderRadius: 4 },
+        { label: 'Expenses', data: expData, backgroundColor: 'rgba(239,68,68,0.7)',  borderRadius: 4 }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12, padding: 12 } } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, ticks: { callback: v => '₱' + v.toLocaleString() } }
+      }
+    }
+  });
+}
+
+function jumpToMonth(monthKey) {
+  selectedDashMonth = monthKey;
+  goTo('transactions');
+  setTimeout(() => {
+    const el = document.getElementById('f-month');
+    if (el) { el.value = monthKey; renderTxList(); }
+  }, 50);
+}
+
+// ─────────────────────────────────────────────
 // TRANSACTIONS
 // ─────────────────────────────────────────────
 let editTxId = null;
@@ -641,6 +835,69 @@ function txHTML(t, withActions = false) {
         <button class="btn btn-danger btn-sm" onclick="deleteTx('${t.id}')">Del</button>
       </div>` : ''}
     </div>`;
+}
+
+async function scanReceipt(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const model = getSettings().model || SETTINGS_DEFAULT.model;
+  const key   = getSettings().openrouterKey || '';
+  if (!key) { alert('Add your OpenRouter API key in Settings first.'); return; }
+
+  // Convert to base64
+  const dataUrl = await new Promise(res => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result);
+    r.readAsDataURL(file);
+  });
+
+  // Show scanning toast
+  const toast = document.createElement('div');
+  toast.textContent = '🔍 Scanning receipt...';
+  toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 20px;border-radius:99px;font-size:14px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3)';
+  document.body.appendChild(toast);
+
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model.includes('vision') || model.includes('vl-') ? model : 'meta-llama/llama-3.2-11b-vision-instruct:free',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Extract the receipt info and respond ONLY with a valid JSON object (no markdown, no extra text) with these fields: {"merchant":"store name","amount":0.00,"date":"YYYY-MM-DD","category":"Food & Dining","type":"expense","notes":"any brief notes"}. Use today\'s date ' + new Date().toISOString().slice(0,10) + ' if date is unclear. Category must be one of: Food & Dining, Shopping, Transportation, Entertainment, Health, Bills & Utilities, Education, Other.' },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]
+        }],
+        max_tokens: 200
+      })
+    });
+    const data = await resp.json();
+    const raw  = data.choices?.[0]?.message?.content || '';
+    // Extract JSON from response
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Could not parse receipt data');
+    const r = JSON.parse(match[0]);
+    toast.remove();
+
+    // Pre-fill the transaction modal
+    editTxId = null;
+    document.getElementById('tx-modal-title').textContent = 'Add Transaction (from Receipt)';
+    document.getElementById('m-type').value     = r.type || 'expense';
+    refreshCatOptions();
+    document.getElementById('m-amount').value   = r.amount || '';
+    document.getElementById('m-name').value     = r.merchant || '';
+    document.getElementById('m-date').value     = r.date || new Date().toISOString().slice(0,10);
+    document.getElementById('m-cat').value      = r.category || 'Other';
+    document.getElementById('m-notes').value    = r.notes || '';
+    openModal('tx-modal');
+  } catch(e) {
+    toast.remove();
+    alert('Receipt scan failed: ' + e.message + '\nTip: Use a vision model in Settings (e.g. llama-3.2-11b-vision-instruct:free)');
+  }
 }
 
 function openTxModal(id = null) {
@@ -1153,13 +1410,236 @@ async function executeTool(name, args) {
 // ─────────────────────────────────────────────
 // CHAT
 // ─────────────────────────────────────────────
-let chatHistory    = [];
-let toolsSupported = true;
+let chatHistory     = [];
+let toolsSupported  = true;
+let activeSessionId = uid();
+let sessionDisplay  = [];
+let pendingImage    = null;
+
+// ── EXPORT ──────────────────────────────────────────────────────────────────
+
+function txsToCSV() {
+  const txs = getTxs();
+  if (!txs.length) { alert('No transactions to export.'); return null; }
+  const sym = getSettings().currency || '₱';
+  const header = ['Date','Type','Name','Category','Amount','Notes'];
+  const rows = txs
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .map(t => [t.date, t.type, `"${(t.name||'').replace(/"/g,'""')}"`, `"${(t.category||'').replace(/"/g,'""')}"`, t.amount, `"${(t.notes||'').replace(/"/g,'""')}"`]);
+  return [header, ...rows].map(r => r.join(',')).join('\n');
+}
+
+function exportCSV() {
+  const csv = txsToCSV();
+  if (!csv) return;
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'spendwise-transactions.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportJSON() {
+  const data = { txs: getTxs(), products: getProds(), budget: getBudget(), settings: getSettings(), sessions: getSessions(), exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'spendwise-data.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importData(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  const reader = new FileReader();
+  reader.onload = e => {
+    let d;
+    try { d = JSON.parse(e.target.result); }
+    catch { alert('That file is not valid JSON. Pick a SpendWise "Download JSON" backup file.'); return; }
+    const txN   = Array.isArray(d.txs) ? d.txs.length : 0;
+    const prodN = Array.isArray(d.products) ? d.products.length : 0;
+    if (!txN && !prodN && !d.budget) {
+      if (!confirm('This file has no transactions, products, or budget. Import anyway?')) return;
+    } else if (!confirm(`Import ${txN} transaction(s) and ${prodN} product(s)?\n\nThis REPLACES the current data in this app.`)) {
+      return;
+    }
+    appData.txs      = Array.isArray(d.txs) ? d.txs : [];
+    appData.products = Array.isArray(d.products) ? d.products : [];
+    appData.budget   = d.budget ?? null;
+    if (d.settings && typeof d.settings === 'object') appData.settings = { ...SETTINGS_DEFAULT, ...d.settings };
+    if (Array.isArray(d.sessions)) appData.sessions = d.sessions;
+    persist();
+    goTo('dashboard');
+    toast('Import complete ✓');
+  };
+  reader.readAsText(file);
+}
+
+function openInSheets() {
+  const csv = txsToCSV();
+  if (!csv) return;
+  // Download CSV first, then open Google Sheets
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'spendwise-transactions.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setTimeout(() => {
+    if (confirm('CSV downloaded!\n\nOpen Google Sheets now?\n(File > Import > Upload the CSV you just downloaded)')) {
+      window.open('https://sheets.new', '_blank');
+    }
+  }, 800);
+}
+
+// ── SETTINGS LOAD/SAVE ───────────────────────────────────────────────────────
+
+function loadSettings() {
+  const s = getSettings();
+  document.getElementById('s-omkar').value   = s.omkarKey || '';
+  document.getElementById('s-orkey').value   = s.openrouterKey || '';
+  document.getElementById('s-currency').value = s.currency || '₱';
+  const modelEl = document.getElementById('s-model');
+  const knownModels = Array.from(modelEl.options).map(o => o.value);
+  if (knownModels.includes(s.model)) {
+    modelEl.value = s.model;
+    document.getElementById('custom-model-row').style.display = 'none';
+  } else if (s.model) {
+    modelEl.value = 'custom';
+    document.getElementById('s-model-custom').value = s.model;
+    document.getElementById('custom-model-row').style.display = '';
+  }
+}
+
+function saveSettings() {
+  const modelEl  = document.getElementById('s-model');
+  const modelVal = modelEl.value === 'custom'
+    ? document.getElementById('s-model-custom').value.trim()
+    : modelEl.value;
+  appData.settings = {
+    omkarKey:      document.getElementById('s-omkar').value.trim(),
+    openrouterKey: document.getElementById('s-orkey').value.trim(),
+    model:         modelVal,
+    currency:      document.getElementById('s-currency').value.trim() || '₱'
+  };
+  persist();
+  alert('Settings saved!');
+}
+
+function nukeData() {
+  if (!confirm('Delete ALL data? This cannot be undone.')) return;
+  appData = { txs: [], products: [], budget: null, settings: { ...SETTINGS_DEFAULT }, sessions: [] };
+  persist();
+  renderDashboard();
+  alert('All data cleared.');
+}
+
+// ── SESSION MANAGEMENT ──────────────────────────────────────────────────────
+
+function autoSaveSession() {
+  if (sessionDisplay.length === 0) return;
+  const sessions = getSessions();
+  const firstUser = sessionDisplay.find(m => m.role === 'user');
+  const name = firstUser ? firstUser.text.slice(0, 45) : 'Chat';
+  const idx  = sessions.findIndex(s => s.id === activeSessionId);
+  const entry = { id: activeSessionId, name, createdAt: new Date().toISOString(), messages: sessionDisplay.slice() };
+  if (idx >= 0) sessions[idx] = entry; else sessions.unshift(entry);
+  save('sw_sessions', sessions.slice(0, 25));
+}
+
+function newSession() {
+  if (chatHistory.length > 0) autoSaveSession();
+  chatHistory = []; sessionDisplay = []; activeSessionId = uid(); toolsSupported = true;
+  clearImg();
+  const box = document.getElementById('chat-msgs');
+  box.innerHTML = '';
+  appendMsg('assistant', 'New chat started! How can I help you?');
+  renderSessionList();
+  document.getElementById('session-panel').style.display = 'none';
+}
+
+function toggleSessionPanel() {
+  const panel = document.getElementById('session-panel');
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'block';
+  if (!visible) renderSessionList();
+}
+
+function renderSessionList() {
+  const sessions = getSessions();
+  const el = document.getElementById('session-list');
+  if (!sessions.length) {
+    el.innerHTML = '<div style="padding:12px 14px;font-size:13px;color:var(--muted)">No saved sessions yet. Chats auto-save when you start a new one.</div>';
+    return;
+  }
+  el.innerHTML = sessions.map(s => `
+    <div class="session-item${s.id === activeSessionId ? ' active' : ''}" onclick="loadSession('${s.id}')">
+      <div class="si-name">${esc(s.name)}</div>
+      <div class="si-date">${new Date(s.createdAt).toLocaleDateString('en-PH',{month:'short',day:'numeric'})}</div>
+      <button class="si-del" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Delete">&#x2715;</button>
+    </div>`).join('');
+}
+
+function loadSession(id) {
+  if (chatHistory.length > 0) autoSaveSession();
+  const s = getSessions().find(x => x.id === id);
+  if (!s) return;
+  activeSessionId = id; chatHistory = []; sessionDisplay = s.messages ? s.messages.slice() : []; toolsSupported = true;
+  clearImg();
+  const box = document.getElementById('chat-msgs');
+  box.innerHTML = '';
+  sessionDisplay.forEach(m => { if (m.isAction) appendActionMsg(m.text); else appendMsg(m.role, m.text); });
+  renderSessionList();
+  document.getElementById('session-panel').style.display = 'none';
+  toast('Session loaded');
+}
+
+function deleteSession(id) {
+  save('sw_sessions', getSessions().filter(s => s.id !== id));
+  if (activeSessionId === id) {
+    activeSessionId = uid(); chatHistory = []; sessionDisplay = [];
+    const box = document.getElementById('chat-msgs');
+    box.innerHTML = '';
+    appendMsg('assistant', 'Session deleted. Start a new conversation!');
+  }
+  renderSessionList();
+  toast('Session deleted');
+}
+
+// -- IMAGE HANDLING --
+
+function handleImgSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const dataUrl  = e.target.result;
+    const comma    = dataUrl.indexOf(',');
+    const mimeType = dataUrl.slice(0, comma).match(/:(.*?);/)[1];
+    const base64   = dataUrl.slice(comma + 1);
+    pendingImage = { base64, mimeType, dataUrl };
+    document.getElementById('img-preview').src = dataUrl;
+    document.getElementById('img-preview-row').style.display = 'flex';
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function clearImg() {
+  pendingImage = null;
+  const row = document.getElementById('img-preview-row');
+  if (row) row.style.display = 'none';
+  const prev = document.getElementById('img-preview');
+  if (prev) prev.src = '';
+}
 
 function buildContext() {
   const txs   = getTxs();
-  const m     = thisMonth();
-  const mTx   = txs.filter(t => t.date.startsWith(m));
+  const m     = selectedDashMonth || thisMonth();
+  const mTx   = txs.filter(t => t.date.startsWith(thisMonth()));
   const inc   = mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const exp   = mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const byCat = {};
@@ -1171,48 +1651,58 @@ function buildContext() {
 
   return `You are SpendWise, a friendly personal finance assistant. Here is the user's current financial snapshot:
 
-MONTH: ${m}
-• Income:   ₱${inc.toFixed(2)}
-• Expenses: ₱${exp.toFixed(2)}
-• Net:      ₱${(inc - exp).toFixed(2)}
+MONTH: ${thisMonth()}
+- Income:   ${fmt(inc)}
+- Expenses: ${fmt(exp)}
+- Net:      ${fmt(inc - exp)}
 
 TOP EXPENSE CATEGORIES:
-${topCats.map(([c, a]) => `• ${c}: ₱${a.toFixed(2)}`).join('\n') || '• None yet'}
+${topCats.map(([c, a]) => `- ${c}: ${fmt(a)}`).join('\n') || '- None yet'}
 
-${budget ? `MONTHLY BUDGET:
-• Total: ₱${budget.total} (${(exp/budget.total*100).toFixed(1)}% used, ₱${(budget.total-exp).toFixed(2)} left)
-${(budget.categories || []).map(c => `• ${c.name}: ₱${(byCat[c.name]||0).toFixed(2)} / ₱${c.amount}`).join('\n')}` : 'No budget set.'}
+${budget ? `MONTHLY BUDGET:\n- Total: ${fmt(budget.total)} (${(exp/budget.total*100).toFixed(1)}% used, ${fmt(budget.total-exp)} left)\n${(budget.categories||[]).map(c=>`- ${c.name}: ${fmt(byCat[c.name]||0)} / ${fmt(c.amount)}`).join('\n')}` : 'No budget set.'}
 
 TRACKED PRODUCTS (${prods.length}):
-${prods.slice(0, 10).map(p => `• ${p.name}: ₱${p.price.toFixed(2)}${p.lazadaPrice != null ? ` (Lazada: ₱${p.lazadaPrice.toFixed(2)})` : ''}`).join('\n') || '• None'}
+${prods.slice(0,10).map(p=>`- ${p.name}: ${fmt(p.price)}${p.lazadaPrice!=null?` (Lazada: ${fmt(p.lazadaPrice)})`:''}`).join('\n')||'- None'}
 
-RECENT TRANSACTIONS (last 20) — use the ID when calling edit_transaction or delete_transaction:
-${recent.map(t => `• [${t.date}] [ID:${t.id}] ${t.type==='income'?'+':'-'}₱${t.amount.toFixed(2)} — ${t.name} (${t.category})`).join('\n') || '• None'}
+RECENT TRANSACTIONS (last 20) -- use the ID when calling edit_transaction or delete_transaction:
+${recent.map(t=>`- [${t.date}] [ID:${t.id}] ${t.type==='income'?'+':'-'}${fmt(t.amount)} -- ${t.name} (${t.category})`).join('\n')||'- None'}
 
-Be concise and helpful. Use Philippine Peso (₱).
+Be concise and helpful.
 
 TOOLS AVAILABLE:
-1. add_transaction — NEW entries only
-2. edit_transaction — change an existing transaction (use ID from list above)
-3. delete_transaction — remove a transaction (use ID from list above)
-4. add_product — save a product to catalog
-5. search_lazada — real-time Lazada PH price search (you have full API access)
+1. add_transaction -- NEW entries only
+2. edit_transaction -- change an existing transaction (use ID from list above)
+3. delete_transaction -- remove a transaction (use ID from list above)
+4. add_product -- save a product to catalog
+5. search_lazada -- real-time Lazada PH price search
 
 CRITICAL RULES:
-- "edit/change/update/fix/correct" a transaction → edit_transaction (NOT add_transaction)
-- "search Lazada / price on Lazada / find on Lazada" → search_lazada immediately
-- "delete/remove" a transaction → delete_transaction
+- "edit/change/update/fix/correct" a transaction => edit_transaction (NOT add_transaction)
+- "search Lazada / price on Lazada / find on Lazada" => search_lazada immediately
+- "delete/remove" a transaction => delete_transaction
 - Always find the transaction ID from the list above before editing/deleting
+- If the user attaches an image of a receipt, analyze it and suggest logging it as an expense
 - Today is ${today()}`;
 }
 
 async function sendMsg() {
   const input = document.getElementById('chat-in');
   const text  = input.value.trim();
-  if (!text) return;
+  const img   = pendingImage;
+  if (!text && !img) return;
   input.value = '';
-  appendMsg('user', text);
-  chatHistory.push({ role: 'user', content: text });
+
+  const displayText = text || '(sent image)';
+  const userContent = img
+    ? [ { type: 'text', text: text || 'Analyze this receipt image and help me log it as an expense.' },
+        { type: 'image_url', image_url: { url: img.dataUrl } } ]
+    : text;
+
+  appendMsg('user', displayText, img ? img.dataUrl : null);
+  sessionDisplay.push({ role: 'user', text: displayText });
+  chatHistory.push({ role: 'user', content: userContent });
+  clearImg();
+
   const btn = document.getElementById('chat-send');
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>';
@@ -1222,14 +1712,20 @@ async function sendMsg() {
 
 async function callAI(retryWithoutTools = false) {
   const s = getSettings();
+  const apiKey = s.openrouterKey || s.orKey || '';
+  const lastUser = [...chatHistory].reverse().find(m => m.role === 'user');
+  const isVision = Array.isArray(lastUser && lastUser.content);
+
+  if (!apiKey) {
+    appendMsg('assistant', 'Please add your OpenRouter API key in Settings first.');
+    return;
+  }
+
   const payload = {
     model: s.model,
-    messages: [
-      { role: 'system', content: buildContext() },
-      ...chatHistory.slice(-16)
-    ]
+    messages: [ { role: 'system', content: buildContext() }, ...chatHistory.slice(-16) ]
   };
-  if (toolsSupported && !retryWithoutTools) {
+  if (toolsSupported && !retryWithoutTools && !isVision) {
     payload.tools       = CHAT_TOOLS;
     payload.tool_choice = 'auto';
   }
@@ -1237,7 +1733,7 @@ async function callAI(retryWithoutTools = false) {
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${s.orKey}`,
+      'Authorization': 'Bearer ' + apiKey,
       'Content-Type':  'application/json',
       'HTTP-Referer':  window.location.href,
       'X-Title':       'SpendWise Expense Tracker'
@@ -1247,32 +1743,36 @@ async function callAI(retryWithoutTools = false) {
   const data = await res.json();
 
   if (!res.ok) {
-    const msg = data.error?.message || '';
+    const msg = (data.error && data.error.message) || '';
     if (!retryWithoutTools && (msg.toLowerCase().includes('tool') || msg.includes('function') || res.status === 400)) {
       toolsSupported = false;
       return callAI(true);
     }
-    throw new Error(msg || `HTTP ${res.status}`);
+    const errText = 'Error: ' + (msg || 'HTTP ' + res.status);
+    appendMsg('assistant', errText);
+    sessionDisplay.push({ role: 'assistant', text: errText });
+    return;
   }
 
   const message = data.choices[0].message;
 
-  if (message.tool_calls?.length) {
+  if (message.tool_calls && message.tool_calls.length) {
     chatHistory.push(message);
     const toolResults = [];
     for (const tc of message.tool_calls) {
       let args;
       try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
-      const result = await executeTool(tc.function.name, args);  // await for async tools
+      const result = await executeTool(tc.function.name, args);
       toolResults.push({ role: 'tool', tool_call_id: tc.id, content: result });
       appendActionMsg(result);
+      sessionDisplay.push({ role: 'action', text: result, isAction: true });
     }
     chatHistory.push(...toolResults);
 
     const followUp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${s.orKey}`,
+        'Authorization': 'Bearer ' + apiKey,
         'Content-Type':  'application/json',
         'HTTP-Referer':  window.location.href,
         'X-Title':       'SpendWise Expense Tracker'
@@ -1287,14 +1787,21 @@ async function callAI(retryWithoutTools = false) {
     const fuData = await followUp.json();
     if (followUp.ok) {
       const fuReply = fuData.choices[0].message.content;
-      if (fuReply) { chatHistory.push({ role: 'assistant', content: fuReply }); appendMsg('assistant', fuReply); }
+      if (fuReply) {
+        chatHistory.push({ role: 'assistant', content: fuReply });
+        appendMsg('assistant', fuReply);
+        sessionDisplay.push({ role: 'assistant', text: fuReply });
+      }
     }
+    autoSaveSession();
     return;
   }
 
   const reply = message.content || '';
   chatHistory.push({ role: 'assistant', content: reply });
   appendMsg('assistant', reply);
+  sessionDisplay.push({ role: 'assistant', text: reply });
+  autoSaveSession();
 }
 
 function appendActionMsg(result) {
@@ -1306,83 +1813,38 @@ function appendActionMsg(result) {
   box.scrollTop = box.scrollHeight;
 }
 
-function appendMsg(role, text) {
+function appendMsg(role, text, imgSrc) {
   const box = document.getElementById('chat-msgs');
   const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.textContent = text;
+  div.className = 'msg ' + role;
+  if (imgSrc && role === 'user') {
+    const img = document.createElement('img');
+    img.src = imgSrc;
+    div.appendChild(img);
+  }
+  if (text) {
+    const span = document.createElement('span');
+    span.style.whiteSpace = 'pre-wrap';
+    span.textContent = text;
+    div.appendChild(span);
+  }
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
 
-// ─────────────────────────────────────────────
-// SETTINGS
-// ─────────────────────────────────────────────
-function loadSettings() {
-  const s = getSettings();
-  document.getElementById('s-omkar').value    = s.omkarKey;
-  document.getElementById('s-orkey').value    = s.orKey;
-  document.getElementById('s-currency').value = s.currency;
-  const sel = document.getElementById('s-model');
-  const knownValues = Array.from(sel.options).map(o => o.value);
-  if (knownValues.includes(s.model)) {
-    sel.value = s.model;
-    document.getElementById('custom-model-row').style.display = 'none';
-  } else {
-    sel.value = 'custom';
-    document.getElementById('custom-model-row').style.display = 'block';
-    document.getElementById('s-model-custom').value = s.model;
-  }
-}
+// -- INIT --
 
-function saveSettings() {
-  const sel   = document.getElementById('s-model');
-  const model = sel.value === 'custom'
-    ? (document.getElementById('s-model-custom').value.trim() || 'nvidia/nemotron-3-ultra-550b-a55b:free')
-    : sel.value;
-  const settings = {
-    omkarKey: document.getElementById('s-omkar').value.trim(),
-    orKey:    document.getElementById('s-orkey').value.trim(),
-    model,
-    currency: document.getElementById('s-currency').value || '₱'
-  };
-  appData.settings = settings;
-  save('sw_settings', settings);
-  toast('Settings saved ✓');
-}
-
-document.getElementById('s-model')?.addEventListener('change', function() {
+document.getElementById('s-model').addEventListener('change', function() {
   document.getElementById('custom-model-row').style.display = this.value === 'custom' ? 'block' : 'none';
 });
 
-function nukeData() {
-  if (!confirm('Delete ALL data (transactions, products, budget)? This cannot be undone.')) return;
-  appData.txs = []; appData.products = []; appData.budget = null; chatHistory = [];
-  if (IS_SERVER) { pushToServer(); }
-  else { ['sw_txs','sw_prods','sw_budget'].forEach(k => localStorage.removeItem(k)); }
-  toast('All data cleared');
-  renderDashboard();
-}
-
-// ─────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ─────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────refreshCatOptions();
+refreshCatOptions();
 document.getElementById('f-month').value = thisMonth();
 if (IS_SERVER) document.getElementById('server-status').textContent = 'Connecting...';
 
-initData().then(() => {
+initData().then(function() {
   renderDashboard();
-  if (IS_SERVER) {
-    const el = document.getElementById('server-status');
-    if (!el.textContent.includes('Synced') && !el.textContent.includes('Offline')) el.textContent = 'Shared mode';
-  }
+  appendMsg('assistant', "Hi! I'm your SpendWise assistant. I can help you:\n• Log expenses: \"I spent ₱500 on groceries\"\n• Edit entries: \"Change my last grocery entry to ₱650\"\n• Search prices: \"How much is Palmolive shampoo on Lazada?\"\n• Scan receipts: tap the 📷 button to attach a receipt photo and I'll log it for you.\n\nWhat would you like to do?");
 });
 </script>
 </body>
