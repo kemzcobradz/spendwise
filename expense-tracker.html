@@ -367,9 +367,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
           <option value="nex-agi/nex-n2-pro:free">Nex AGI N2 Pro (free)</option>
           <option value="cohere/north-mini-code:free">Cohere North Mini Code (free)</option>
         </optgroup>
-        <optgroup label="📷 Vision Models (image analysis)">
-          <option value="meta-llama/llama-3.2-11b-vision-instruct:free">Llama 3.2 11B Vision (free) — for image uploads</option>
-          <option value="qwen/qwen-2-vl-7b-instruct:free">Qwen 2 VL 7B Vision (free)</option>
+        <optgroup label="📷 Vision Models (image analysis &amp; receipts)">
+          <option value="nvidia/nemotron-nano-12b-v2-vl:free">NVIDIA Nemotron Nano 12B VL (free) — best for receipts</option>
+          <option value="google/gemma-4-31b-it:free">Google Gemma 4 31B (free, vision)</option>
+          <option value="google/gemma-4-26b-a4b-it:free">Google Gemma 4 26B (free, vision)</option>
         </optgroup>
         <optgroup label="💡 Paste any ':free' model ID below">
           <option value="custom">— enter custom model ID in field below —</option>
@@ -526,6 +527,29 @@ const SETTINGS_DEFAULT = {
   model:         'nvidia/nemotron-3-ultra-550b-a55b:free',
   currency:      '₱'
 };
+
+// Current free vision-capable models on OpenRouter, tried in order for receipt scanning
+// (the old llama-3.2-11b-vision / qwen-2-vl free models were retired).
+const VISION_FALLBACKS = [
+  'nvidia/nemotron-nano-12b-v2-vl:free',
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free'
+];
+
+// True if a model id looks vision-capable (handles images itself).
+function isVisionCapable(id) { return /vision|[\-/]vl[\-:]|v2-vl|gemma-4|omni/i.test(id || ''); }
+
+// Replace image parts in a message list with text placeholders so a TEXT-ONLY model
+// (e.g. owl-alpha) doesn't choke on images still sitting in the chat history.
+function stripImages(messages) {
+  return messages.map(m => {
+    if (Array.isArray(m.content)) {
+      const txt = m.content.filter(p => p && p.type === 'text').map(p => p.text).join(' ').trim();
+      return { ...m, content: txt || '[image attached earlier]' };
+    }
+    return m;
+  });
+}
 let appData = { txs: [], products: [], budget: null, settings: { ...SETTINGS_DEFAULT }, sessions: [] };
 let syncTimer = null;
 
@@ -859,45 +883,141 @@ async function scanReceipt(input) {
   toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 20px;border-radius:99px;font-size:14px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3)';
   document.body.appendChild(toast);
 
-  try {
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model.includes('vision') || model.includes('vl-') ? model : 'meta-llama/llama-3.2-11b-vision-instruct:free',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Extract the receipt info and respond ONLY with a valid JSON object (no markdown, no extra text) with these fields: {"merchant":"store name","amount":0.00,"date":"YYYY-MM-DD","category":"Food & Dining","type":"expense","notes":"any brief notes"}. Use today\'s date ' + new Date().toISOString().slice(0,10) + ' if date is unclear. Category must be one of: Food & Dining, Shopping, Transportation, Entertainment, Health, Bills & Utilities, Education, Other.' },
-            { type: 'image_url', image_url: { url: dataUrl } }
-          ]
-        }],
-        max_tokens: 200
-      })
-    });
-    const data = await resp.json();
-    const raw  = data.choices?.[0]?.message?.content || '';
-    // Extract JSON from response
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Could not parse receipt data');
-    const r = JSON.parse(match[0]);
-    toast.remove();
+  // Build the list of vision models to try: the user's model first if it's vision-capable,
+  // then the known-good free vision models so one being down doesn't break scanning.
+  const isVisionModel = /vision|[\-/]vl[\-:]|v2-vl|gemma-4|omni/i.test(model);
+  const candidates = [];
+  if (isVisionModel) candidates.push(model);
+  VISION_FALLBACKS.forEach(m => { if (!candidates.includes(m)) candidates.push(m); });
 
-    // Pre-fill the transaction modal
-    editTxId = null;
-    document.getElementById('tx-modal-title').textContent = 'Add Transaction (from Receipt)';
-    document.getElementById('m-type').value     = r.type || 'expense';
-    refreshCatOptions();
-    document.getElementById('m-amount').value   = r.amount || '';
-    document.getElementById('m-name').value     = r.merchant || '';
-    document.getElementById('m-date').value     = r.date || new Date().toISOString().slice(0,10);
-    document.getElementById('m-cat').value      = r.category || 'Other';
-    document.getElementById('m-notes').value    = r.notes || '';
-    openModal('tx-modal');
-  } catch(e) {
-    toast.remove();
-    alert('Receipt scan failed: ' + e.message + '\nTip: Use a vision model in Settings (e.g. llama-3.2-11b-vision-instruct:free)');
+  const promptText = 'Extract the receipt info and respond ONLY with a valid JSON object (no markdown, no extra text) with these fields: {"merchant":"store name","amount":0.00,"date":"YYYY-MM-DD","category":"Food & Dining","type":"expense","notes":"any brief notes"}. Use today\'s date ' + today() + ' if the date is unclear. Category must be one of: Food & Dining, Transport, Utilities, Shopping, Entertainment, Healthcare, Rent / Housing, Education, Personal Care, Savings, Other.';
+
+  let lastErr = '';
+  for (const vModel of candidates) {
+    try {
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: vModel,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: promptText },
+              { type: 'image_url', image_url: { url: dataUrl } }
+            ]
+          }],
+          max_tokens: 300
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) { lastErr = (data.error && data.error.message) || ('HTTP ' + resp.status); continue; }
+      const raw = (data.choices && data.choices[0] && data.choices[0].message) ? (data.choices[0].message.content || '') : '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) { lastErr = vModel + ' did not return readable receipt data.'; continue; }
+      let r;
+      try { r = JSON.parse(match[0]); } catch { lastErr = 'Could not parse the receipt JSON from ' + vModel + '.'; continue; }
+      toast.remove();
+
+      // Pre-fill the transaction modal
+      editTxId = null;
+      document.getElementById('tx-modal-title').textContent = 'Add Transaction (from Receipt)';
+      document.getElementById('m-type').value   = r.type || 'expense';
+      refreshCatOptions();
+      document.getElementById('m-amount').value = r.amount || '';
+      document.getElementById('m-name').value   = r.merchant || '';
+      document.getElementById('m-date').value   = r.date || today();
+      document.getElementById('m-cat').value    = r.category || 'Other';
+      document.getElementById('m-notes').value  = r.notes || '';
+      openModal('tx-modal');
+      return; // success — stop trying further models
+    } catch (e) {
+      lastErr = e.message;
+    }
   }
+
+  // Every candidate failed
+  toast.remove();
+  alert('Receipt scan failed: ' + (lastErr || 'unknown error') +
+        '\n\nThe free vision models may be busy or rate-limited — wait a moment and try again. ' +
+        'You can also pick a vision model in Settings (Gemma 4 or Nemotron VL).');
+}
+
+// ─────────────────────────────────────────────
+// CHAT RECEIPT EXTRACTION
+// Runs a single, strict vision pass that returns the FULL receipt as structured
+// JSON (every line item + its PRINTED line total + the grand total). The result
+// is injected into the chat as persistent TEXT, so the text-only chat model
+// (e.g. owl-alpha) keeps accurate figures across every follow-up turn and can use
+// its tools. This is what stops the "I don't see an image" + hallucinated-price bugs.
+// ─────────────────────────────────────────────
+const RECEIPT_EXTRACT_PROMPT =
+  'You are an OCR engine. Read this receipt and respond with ONE valid JSON object ONLY ' +
+  '(no markdown, no commentary). Schema:\n' +
+  '{"merchant":"store name as printed","date":"YYYY-MM-DD","items":[{"name":"item name EXACTLY as printed","qty":1,"price":0.00}],"subtotal":0.00,"total":0.00}\n' +
+  'STRICT RULES:\n' +
+  '- "price" MUST be the PRINTED line total shown on that row, copied digit-for-digit. NEVER divide by quantity or compute a per-unit price.\n' +
+  '- Copy each item name EXACTLY as printed (e.g. "GARDENIA WHTE 600G"). Do not expand abbreviations, guess brands, or change words.\n' +
+  '- "qty" is the quantity shown in parentheses if any, else 1.\n' +
+  '- "total" MUST be the "TOTAL AMOUNT DUE" printed on the receipt.\n' +
+  '- Include EVERY item line. Do not invent, merge, drop, or reorder items.\n' +
+  '- If any value is unreadable, use null. Never guess a number.';
+
+async function extractReceiptData(dataUrl) {
+  const s   = getSettings();
+  const key = s.openrouterKey || s.orKey || '';
+  if (!key) return { ok: false, error: 'No OpenRouter API key set.' };
+
+  const model = s.model || SETTINGS_DEFAULT.model;
+  const candidates = [];
+  if (isVisionCapable(model)) candidates.push(model);
+  VISION_FALLBACKS.forEach(m => { if (!candidates.includes(m)) candidates.push(m); });
+
+  let lastErr = '';
+  for (const vModel of candidates) {
+    try {
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: vModel,
+          messages: [{ role: 'user', content: [
+            { type: 'text', text: RECEIPT_EXTRACT_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]}],
+          max_tokens: 1200
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) { lastErr = (data.error && data.error.message) || ('HTTP ' + resp.status); continue; }
+      const raw   = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) { lastErr = vModel + ' returned no readable receipt JSON.'; continue; }
+      let r;
+      try { r = JSON.parse(match[0]); } catch { lastErr = 'Could not parse receipt JSON from ' + vModel + '.'; continue; }
+      return { ok: true, data: r, model: vModel };
+    } catch (e) { lastErr = e.message; }
+  }
+  return { ok: false, error: lastErr || 'unknown error' };
+}
+
+// Render the extracted receipt as a compact, trusted text block for the chat history.
+function formatReceiptForChat(r) {
+  const money = v => (v == null || isNaN(v)) ? '?' : fmt(Number(v));
+  const lines = (Array.isArray(r.items) ? r.items : []).map((it, i) => {
+    const qty = (it.qty && Number(it.qty) > 1) ? ` x${it.qty}` : '';
+    return `${i + 1}. ${it.name || '(unreadable)'}${qty} — ${money(it.price)} (printed line total)`;
+  });
+  return [
+    '[RECEIPT SCAN — extracted from the image the user just attached. These are the EXACT printed figures. Use them verbatim; do NOT recompute, alter, or re-derive any price.]',
+    `Merchant: ${r.merchant || '(unknown)'}`,
+    `Date: ${r.date || today()}`,
+    'Items (name — PRINTED line total, already includes quantity):',
+    ...lines,
+    r.subtotal != null ? `Subtotal: ${money(r.subtotal)}` : '',
+    `TOTAL AMOUNT DUE: ${money(r.total)}`,
+    'When adding these to Products or summing them, use each item\'s PRINTED line total above as its price. The sum of the line totals should equal the printed TOTAL AMOUNT DUE.'
+  ].filter(Boolean).join('\n');
 }
 
 function openTxModal(id = null) {
@@ -1305,6 +1425,20 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'delete_product',
+      description: 'Delete one or more products from the CATALOG (not transactions). Use when the user says "delete", "remove", or "clear" a product or products. To delete a specific product, pass its product_id (shown as [PID:xxx] in the product list). To remove EVERY product in the catalog, pass delete_all: true. Never use delete_transaction for products.',
+      parameters: {
+        type: 'object',
+        properties: {
+          product_id: { type: 'string',  description: 'The [PID:xxx] id of the product to delete (from the tracked products list in context)' },
+          delete_all: { type: 'boolean', description: 'Set true to delete ALL products in the catalog at once' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'search_lazada',
       description: 'Search Lazada Philippines for real-time product prices. Use this immediately when the user asks about Lazada prices, says "search Lazada", "how much is [product] on Lazada?", or "find [product] in Lazada". You have full access to the Lazada PH catalog via an API — do NOT say you cannot browse.',
       parameters: {
@@ -1313,6 +1447,32 @@ const CHAT_TOOLS = [
           query: { type: 'string', description: 'Product search term, e.g. "Palmolive shampoo 200ml"' }
         },
         required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_budget',
+      description: 'Set or update the monthly budget. Use when the user says "set a budget", "my budget is", "add a budget", "change my budget", or asks to set spending limits. This REPLACES the existing budget. Always include the total. Optionally include per-category spending limits.',
+      parameters: {
+        type: 'object',
+        properties: {
+          total: { type: 'number', description: 'Total monthly budget in Philippine Peso (positive number)' },
+          categories: {
+            type: 'array',
+            description: 'Optional per-category spending limits. Omit if the user only gave a total.',
+            items: {
+              type: 'object',
+              properties: {
+                category: { type: 'string', description: 'Expense category, e.g. Food & Dining, Transport, Utilities, Shopping, Entertainment, Healthcare, Rent / Housing, Education, Personal Care, Savings, Other' },
+                limit:    { type: 'number', description: 'Monthly limit for this category in Philippine Peso' }
+              },
+              required: ['category', 'limit']
+            }
+          }
+        },
+        required: ['total']
       }
     }
   }
@@ -1381,6 +1541,22 @@ async function executeTool(name, args) {
     return `✅ Added product: ${args.name} — ${fmt(args.price)} (${args.category})`;
   }
 
+  if (name === 'delete_product') {
+    const prods = getProds();
+    if (args.delete_all) {
+      const n = prods.length;
+      if (!n) return 'The product catalog is already empty.';
+      save('sw_prods', []);
+      if (document.querySelector('.page.active')?.id === 'page-products') renderProds();
+      return `🗑️ Deleted all ${n} product(s) from the catalog.`;
+    }
+    const target = prods.find(p => p.id === args.product_id);
+    if (!target) return `⚠️ Product not found (ID: ${args.product_id}). Use the [PID:xxx] id from the product list, or pass delete_all: true to clear everything.`;
+    save('sw_prods', prods.filter(p => p.id !== args.product_id));
+    if (document.querySelector('.page.active')?.id === 'page-products') renderProds();
+    return `🗑️ Deleted product "${target.name}" (${fmt(target.price)}).`;
+  }
+
   if (name === 'search_lazada') {
     try {
       const key      = getSettings().omkarKey;
@@ -1402,6 +1578,21 @@ async function executeTool(name, args) {
     } catch (err) {
       return `Lazada search failed: ${err.message}`;
     }
+  }
+
+  if (name === 'set_budget') {
+    const total = Math.abs(Number(args.total));
+    if (!total || isNaN(total)) return '⚠️ Please tell me a budget total amount.';
+    const cats = Array.isArray(args.categories)
+      ? args.categories
+          .filter(c => c && c.category && c.limit != null && !isNaN(Number(c.limit)))
+          .map(c => ({ name: c.category, amount: Math.abs(Number(c.limit)) }))
+      : [];
+    save('sw_budget', { total, categories: cats, updated: new Date().toISOString() });
+    const active = document.querySelector('.page.active')?.id;
+    if (active === 'page-budget')     renderBudget();
+    if (active === 'page-dashboard')  renderDashboard();
+    return `✅ Budget set: ${fmt(total)}/month${cats.length ? ' — limits: ' + cats.map(c => `${c.name} ${fmt(c.amount)}`).join(', ') : ''}`;
   }
 
   return `⚠️ Unknown tool: ${name}`;
@@ -1661,8 +1852,8 @@ ${topCats.map(([c, a]) => `- ${c}: ${fmt(a)}`).join('\n') || '- None yet'}
 
 ${budget ? `MONTHLY BUDGET:\n- Total: ${fmt(budget.total)} (${(exp/budget.total*100).toFixed(1)}% used, ${fmt(budget.total-exp)} left)\n${(budget.categories||[]).map(c=>`- ${c.name}: ${fmt(byCat[c.name]||0)} / ${fmt(c.amount)}`).join('\n')}` : 'No budget set.'}
 
-TRACKED PRODUCTS (${prods.length}):
-${prods.slice(0,10).map(p=>`- ${p.name}: ${fmt(p.price)}${p.lazadaPrice!=null?` (Lazada: ${fmt(p.lazadaPrice)})`:''}`).join('\n')||'- None'}
+TRACKED PRODUCTS (${prods.length}) -- use the PID when calling delete_product:
+${prods.slice(0,40).map(p=>`- [PID:${p.id}] ${p.name}: ${fmt(p.price)}${p.lazadaPrice!=null?` (Lazada: ${fmt(p.lazadaPrice)})`:''}`).join('\n')||'- None'}
 
 RECENT TRANSACTIONS (last 20) -- use the ID when calling edit_transaction or delete_transaction:
 ${recent.map(t=>`- [${t.date}] [ID:${t.id}] ${t.type==='income'?'+':'-'}${fmt(t.amount)} -- ${t.name} (${t.category})`).join('\n')||'- None'}
@@ -1675,14 +1866,41 @@ TOOLS AVAILABLE:
 3. delete_transaction -- remove a transaction (use ID from list above)
 4. add_product -- save a product to catalog
 5. search_lazada -- real-time Lazada PH price search
+6. set_budget -- set or update the monthly budget (total, plus optional per-category limits)
+7. delete_product -- remove a product from the catalog (use the [PID:xxx] id, or delete_all:true for the whole catalog)
 
 CRITICAL RULES:
 - "edit/change/update/fix/correct" a transaction => edit_transaction (NOT add_transaction)
 - "search Lazada / price on Lazada / find on Lazada" => search_lazada immediately
 - "delete/remove" a transaction => delete_transaction
+- "delete/remove a PRODUCT" or "clear the catalog" => delete_product (NEVER delete_transaction). Products and transactions are SEPARATE — deleting products must not touch transactions, and vice versa.
+- "delete all products" => delete_product with delete_all:true
+- "set/add/change a budget" or "my budget is X" or "limit X to Y" => set_budget
 - Always find the transaction ID from the list above before editing/deleting
 - If the user attaches an image of a receipt, analyze it and suggest logging it as an expense
-- Today is ${today()}`;
+- Today is ${today()}
+
+MONEY & MATH RULES (accuracy matters more than speed — follow these exactly):
+- NEVER invent, estimate, or round a financial figure. Use ONLY the numbers in the snapshot above or the exact numbers the user states.
+- Do not confuse these — they are different things:
+  • Net balance = Income − Expenses. It is leftover money, NOT a budget and NOT income.
+  • Budget total = the spending cap the user chooses for the month. It is NOT income and NOT net balance.
+  • Budget remaining = Budget total − Expenses so far this month.
+- Allocations are SUBTRACTED from available money, never added. Example: ₱12,110 available − ₱8,000 set aside = ₱4,110 left. (Adding them, e.g. 12,110 + 8,000, is WRONG.)
+- When the user gives a category limit but no total budget, DO NOT make up a total. Ask: "What should your total monthly budget be?" — or confirm whether that amount IS the total before calling set_budget.
+- Whenever you do a calculation, show the formula with the actual numbers (e.g. "22,000 − 9,890 = 12,110") so the user can verify it. When summing a list, add the values one at a time and double-check the running total before stating it.
+
+RECEIPT RULES (when a "[RECEIPT SCAN ...]" block appears in the conversation):
+- That block is the GROUND TRUTH for the receipt. Copy item names and prices from it VERBATIM — never re-read, paraphrase, round, or "correct" them from memory.
+- Each item's listed price is the PRINTED LINE TOTAL (it already accounts for quantity). When adding items to Products or summing them, use that exact price — do NOT compute a per-unit price.
+- The sum of the line totals should equal the printed TOTAL AMOUNT DUE. If your sum doesn't match, you made an arithmetic error — recompute; do NOT claim items are "missing" unless a line is genuinely absent from the block.
+- When the user says "add the items to Products", call add_product once per line item using its exact name and printed line total. Do not claim they are "already added" unless they appear in the TRACKED PRODUCTS list above.
+- This app has NO month-to-month rollover/carryover. Unspent budget does NOT carry to next month. Never say a balance is "carried forward" — if asked, say that feature isn't available yet.
+- If you are unsure of any number, ASK. Never guess.
+
+BUDGETING HELP (you are a budgeting advisor, not just a tracker):
+- Proactively help the user budget: flag overspending, note when expenses are near a category or total limit, and suggest realistic limits based on the ACTUAL spending shown above.
+- Every suggestion and number must trace back to the real figures in this context — never to assumptions.`;
 }
 
 async function sendMsg() {
@@ -1693,20 +1911,38 @@ async function sendMsg() {
   input.value = '';
 
   const displayText = text || '(sent image)';
-  const userContent = img
-    ? [ { type: 'text', text: text || 'Analyze this receipt image and help me log it as an expense.' },
-        { type: 'image_url', image_url: { url: img.dataUrl } } ]
-    : text;
 
+  // Always show the user's message (with the image thumbnail) right away.
   appendMsg('user', displayText, img ? img.dataUrl : null);
   sessionDisplay.push({ role: 'user', text: displayText });
-  chatHistory.push({ role: 'user', content: userContent });
   clearImg();
 
   const btn = document.getElementById('chat-send');
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>';
-  try { await callAI(); }
+
+  try {
+    if (img) {
+      // Read the receipt ONCE into structured text, then hand the chat model accurate,
+      // PERSISTENT figures (so it never "loses" the image and never invents prices).
+      appendActionMsg('🔍 Reading receipt…');
+      const ext = await extractReceiptData(img.dataUrl);
+      if (ext.ok) {
+        const receiptBlock = formatReceiptForChat(ext.data);
+        const userText = text || 'I attached a receipt. Read it and help me with it.';
+        chatHistory.push({ role: 'user', content: userText + '\n\n' + receiptBlock });
+      } else {
+        // Extraction failed — fall back to sending the raw image to a vision model.
+        chatHistory.push({ role: 'user', content: [
+          { type: 'text', text: text || 'Analyze this receipt image and help me log it as an expense.' },
+          { type: 'image_url', image_url: { url: img.dataUrl } }
+        ]});
+      }
+    } else {
+      chatHistory.push({ role: 'user', content: text });
+    }
+    await callAI();
+  }
   finally { btn.disabled = false; btn.textContent = 'Send'; }
 }
 
@@ -1721,30 +1957,50 @@ async function callAI(retryWithoutTools = false) {
     return;
   }
 
+  // Image messages must go to a vision-capable model — the chat model (e.g. owl-alpha) may be text-only.
+  const visionQueue = [];
+  if (isVision) {
+    if (isVisionCapable(s.model)) visionQueue.push(s.model);
+    VISION_FALLBACKS.forEach(m => { if (!visionQueue.includes(m)) visionQueue.push(m); });
+  }
+
+  let messages = [ { role: 'system', content: buildContext() }, ...chatHistory.slice(-16) ];
+  // If the model that will handle this turn is text-only, drop any images from history.
+  if (!isVision && !isVisionCapable(s.model)) messages = stripImages(messages);
+
   const payload = {
-    model: s.model,
-    messages: [ { role: 'system', content: buildContext() }, ...chatHistory.slice(-16) ]
+    model: isVision ? visionQueue[0] : s.model,
+    messages
   };
   if (toolsSupported && !retryWithoutTools && !isVision) {
     payload.tools       = CHAT_TOOLS;
     payload.tool_choice = 'auto';
   }
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + apiKey,
-      'Content-Type':  'application/json',
-      'HTTP-Referer':  window.location.href,
-      'X-Title':       'SpendWise Expense Tracker'
-    },
-    body: JSON.stringify(payload)
-  });
-  const data = await res.json();
+  // For image turns, try each vision model in turn so one being down/unavailable doesn't fail the scan.
+  const modelQueue = isVision ? visionQueue : [payload.model];
+  let res, data;
+  for (let i = 0; i < modelQueue.length; i++) {
+    payload.model = modelQueue[i];
+    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type':  'application/json',
+        'HTTP-Referer':  window.location.href,
+        'X-Title':       'SpendWise Expense Tracker'
+      },
+      body: JSON.stringify(payload)
+    });
+    data = await res.json();
+    if (res.ok) break;
+    if (isVision && i < modelQueue.length - 1) continue; // try next vision model
+    break;
+  }
 
   if (!res.ok) {
     const msg = (data.error && data.error.message) || '';
-    if (!retryWithoutTools && (msg.toLowerCase().includes('tool') || msg.includes('function') || res.status === 400)) {
+    if (!retryWithoutTools && !isVision && (msg.toLowerCase().includes('tool') || msg.includes('function') || res.status === 400)) {
       toolsSupported = false;
       return callAI(true);
     }
