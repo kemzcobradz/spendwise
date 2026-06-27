@@ -491,14 +491,11 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 <!-- ══ BUDGET MODAL ══ -->
 <div id="budget-modal" class="modal-overlay" style="display:none">
   <div class="modal">
-    <h3>Configure Monthly Budget</h3>
-    <div class="form-row">
-      <label>Total Monthly Budget (₱)</label>
-      <input type="number" id="b-total" placeholder="e.g. 30000" min="0" step="100">
-    </div>
-    <p style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:10px;">CATEGORY LIMITS (optional)</p>
+    <h3>Configure Budgets</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;">Add a budget for each category you want to track. Each category can have only one budget, and spending is deducted from its matching category automatically. Add as many as you like.</p>
     <div id="b-cats"></div>
-    <button class="btn btn-ghost btn-sm" onclick="addBudgetCatRow()" style="margin-bottom:16px;">+ Add category</button>
+    <button class="btn btn-ghost btn-sm" onclick="addBudgetCatRow()" style="margin-bottom:12px;">+ Add budget</button>
+    <div id="b-total-preview" style="font-size:13px;color:var(--muted);margin-bottom:16px;"></div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('budget-modal')">Cancel</button>
       <button class="btn btn-primary" onclick="saveBudget()">Save Budget</button>
@@ -556,6 +553,13 @@ let syncTimer = null;
 function getTxs()      { return appData.txs; }
 function getProds()    { return appData.products; }
 function getBudget()   { return appData.budget; }
+// Total budget = sum of every category envelope. There is no separate global pool.
+function budgetTotal(b) { return (b?.categories || []).reduce((s, c) => s + (Number(c.amount) || 0), 0); }
+function refreshBudgetViews() {
+  const active = document.querySelector('.page.active')?.id;
+  if (active === 'page-budget')    renderBudget();
+  if (active === 'page-dashboard') renderDashboard();
+}
 function getSettings() { return appData.settings; }
 function getSessions() { return appData.sessions || []; }
 
@@ -672,6 +676,28 @@ function toast(msg, ms = 2800) {
 const EXP_CATS = ['Food & Dining','Transport','Utilities','Shopping','Entertainment','Healthcare','Rent / Housing','Education','Personal Care','Savings','Other'];
 const INC_CATS = ['Salary','Freelance','Business','Investment','Bonus','Gift','Other'];
 
+// Map an arbitrary user/AI string to one canonical expense category, or null if no match.
+const CAT_SYNONYMS = {
+  'fuel':'Transport','gas':'Transport','gasoline':'Transport','petrol':'Transport','commute':'Transport','grab':'Transport','jeep':'Transport','fare':'Transport','travel':'Transport',
+  'groceries':'Food & Dining','grocery':'Food & Dining','food':'Food & Dining','dining':'Food & Dining','restaurant':'Food & Dining','meals':'Food & Dining',
+  'electric':'Utilities','electricity':'Utilities','water':'Utilities','internet':'Utilities','wifi':'Utilities','bills':'Utilities','phone':'Utilities','load':'Utilities',
+  'rent':'Rent / Housing','housing':'Rent / Housing','mortgage':'Rent / Housing',
+  'health':'Healthcare','medical':'Healthcare','medicine':'Healthcare','doctor':'Healthcare',
+  'shop':'Shopping','clothes':'Shopping','clothing':'Shopping',
+  'fun':'Entertainment','movies':'Entertainment','games':'Entertainment',
+  'school':'Education','tuition':'Education','savings':'Savings','save':'Savings'
+};
+function matchCategory(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  const exact = EXP_CATS.find(c => c.toLowerCase() === s);
+  if (exact) return exact;
+  if (CAT_SYNONYMS[s]) return CAT_SYNONYMS[s];
+  for (const [k, v] of Object.entries(CAT_SYNONYMS)) if (s.includes(k)) return v;
+  const partial = EXP_CATS.find(c => c.toLowerCase().includes(s) || s.includes(c.toLowerCase()));
+  return partial || null;
+}
+
 function refreshCatOptions() {
   const type = document.getElementById('m-type').value;
   const cats = type === 'income' ? INC_CATS : EXP_CATS;
@@ -715,10 +741,13 @@ function renderDashboard() {
     <div class="card summary-card"><div class="s-label">Expenses</div><div class="s-value s-expense">${fmt(totalExp)}</div></div>
     <div class="card summary-card"><div class="s-label">Net Balance</div><div class="s-value s-net">${fmt(net)}</div></div>
   `;
-  if (budget) {
-    const pct = Math.round(totalExp / budget.total * 100);
+  if (budget && budgetTotal(budget) > 0) {
+    const bTotal  = budgetTotal(budget);
+    const tracked = new Set((budget.categories || []).map(c => c.name));
+    const bSpent  = mTx.filter(t => t.type === 'expense' && tracked.has(t.category)).reduce((s, t) => s + t.amount, 0);
+    const pct = Math.round(bSpent / bTotal * 100);
     const col = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
-    cards += `<div class="card summary-card"><div class="s-label">Budget Used</div><div class="s-value" style="color:${col}">${pct}%</div><div style="font-size:12px;color:var(--muted);margin-top:4px">${fmt(totalExp)} of ${fmt(budget.total)}</div></div>`;
+    cards += `<div class="card summary-card"><div class="s-label">Budget Used</div><div class="s-value" style="color:${col}">${pct}%</div><div style="font-size:12px;color:var(--muted);margin-top:4px">${fmt(bSpent)} of ${fmt(bTotal)}</div></div>`;
   }
   document.getElementById('dash-cards').innerHTML = cards;
 
@@ -1270,9 +1299,10 @@ function renderProds() {
 // ─────────────────────────────────────────────
 function openBudgetModal() {
   const b = getBudget();
-  document.getElementById('b-total').value = b?.total || '';
   document.getElementById('b-cats').innerHTML = '';
   (b?.categories || []).forEach(c => addBudgetCatRow(c.name, c.amount));
+  if (!(b?.categories || []).length) addBudgetCatRow();
+  updateBudgetPreview();
   openModal('budget-modal');
 }
 
@@ -1280,21 +1310,45 @@ function addBudgetCatRow(name = '', amount = '') {
   const div = document.createElement('div');
   div.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;';
   div.innerHTML = `
-    <select style="flex:1">${EXP_CATS.map(c => `<option${c === name ? ' selected' : ''}>${c}</option>`).join('')}</select>
-    <input type="number" placeholder="Limit (₱)" value="${amount}" min="0" step="100" style="width:130px">
-    <button class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">✕</button>`;
+    <select style="flex:1" onchange="updateBudgetPreview()">${EXP_CATS.map(c => `<option${c === name ? ' selected' : ''}>${c}</option>`).join('')}</select>
+    <input type="number" placeholder="Limit (₱)" value="${amount}" min="0" step="100" style="width:130px" oninput="updateBudgetPreview()">
+    <button class="btn btn-danger btn-sm" onclick="this.parentElement.remove();updateBudgetPreview()">✕</button>`;
   document.getElementById('b-cats').appendChild(div);
 }
 
-function saveBudget() {
-  const total = parseFloat(document.getElementById('b-total').value);
-  if (!total || total <= 0) { toast('Enter a budget amount'); return; }
+// Read the modal rows into {name, amount} envelopes (only rows with a positive amount).
+function readBudgetRows() {
   const cats = [];
   document.querySelectorAll('#b-cats > div').forEach(row => {
     const sel = row.querySelector('select');
     const inp = row.querySelector('input');
-    if (sel && inp && inp.value) cats.push({ name: sel.value, amount: parseFloat(inp.value) });
+    const amt = parseFloat(inp?.value);
+    if (sel && amt > 0) cats.push({ name: sel.value, amount: amt });
   });
+  return cats;
+}
+
+function updateBudgetPreview() {
+  const total = readBudgetRows().reduce((s, c) => s + c.amount, 0);
+  const el = document.getElementById('b-total-preview');
+  if (el) el.innerHTML = `Total budget (sum of all categories): <strong style="color:var(--text)">${fmt(total)}</strong>`;
+}
+
+function saveBudget() {
+  const cats = readBudgetRows();
+  // Enforce one budget per category — no category may appear twice.
+  const seen = new Set();
+  const dup = cats.find(c => seen.size === seen.add(c.name).size);
+  if (dup) { toast(`"${dup.name}" is used more than once — each category can have only one budget.`); return; }
+  if (!cats.length) {
+    // No envelopes left: clear the budget entirely.
+    save('sw_budget', null);
+    closeModal('budget-modal');
+    renderBudget();
+    toast('Budget cleared');
+    return;
+  }
+  const total = cats.reduce((s, c) => s + c.amount, 0);
   save('sw_budget', { total, categories: cats, updated: new Date().toISOString() });
   closeModal('budget-modal');
   renderBudget();
@@ -1308,24 +1362,28 @@ function renderBudget() {
   const txs   = getTxs();
   const m     = thisMonth();
   const mExp  = txs.filter(t => t.type === 'expense' && t.date.startsWith(m));
-  const spent = mExp.reduce((s, t) => s + t.amount, 0);
-  const pct   = Math.min(100, spent / b.total * 100);
-  const barCol = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
   const byCat = {};
   mExp.forEach(t => { byCat[t.category] = (byCat[t.category] || 0) + t.amount; });
+  const total = budgetTotal(b);
+  // Total bar reflects spending in BUDGETED categories only — money spent
+  // outside any budget shows under "Other Spending" and never eats a budget.
+  const trackedNames = new Set((b.categories || []).map(c => c.name));
+  const spent = mExp.filter(t => trackedNames.has(t.category)).reduce((s, t) => s + t.amount, 0);
+  const pct   = total > 0 ? Math.min(100, spent / total * 100) : 0;
+  const barCol = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
 
   let html = `
     <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:6px"><strong>Total Budget</strong><span>${fmt(spent)} / ${fmt(b.total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px"><strong>Total Budget</strong><span>${fmt(spent)} / ${fmt(total)}</span></div>
       <div class="budget-bar"><div class="budget-fill" style="width:${pct}%;background:${barCol}"></div></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px">${pct.toFixed(1)}% used · <strong>${fmt(b.total - spent)}</strong> remaining</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">${pct.toFixed(1)}% used · <strong>${fmt(total - spent)}</strong> remaining</div>
     </div>`;
 
   if (b.categories?.length) {
-    html += '<div class="card" style="margin-bottom:14px"><h3 style="margin-bottom:16px">Category Limits</h3>';
+    html += '<div class="card" style="margin-bottom:14px"><h3 style="margin-bottom:16px">Category Budgets</h3>';
     b.categories.forEach(c => {
       const s = byCat[c.name] || 0;
-      const cp = Math.min(100, s / c.amount * 100);
+      const cp = c.amount > 0 ? Math.min(100, s / c.amount * 100) : 0;
       const cc = cp > 90 ? 'var(--danger)' : cp > 70 ? 'var(--warning)' : 'var(--success)';
       html += `<div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px"><span>${esc(c.name)}</span><span>${fmt(s)} / ${fmt(c.amount)}</span></div>
@@ -1336,10 +1394,9 @@ function renderBudget() {
     html += '</div>';
   }
 
-  const trackedNames = new Set((b.categories || []).map(c => c.name));
   const untracked = Object.entries(byCat).filter(([cat]) => !trackedNames.has(cat));
   if (untracked.length) {
-    html += '<div class="card"><h3 style="margin-bottom:12px">Other Spending</h3>';
+    html += '<div class="card"><h3 style="margin-bottom:4px">Other Spending</h3><p style="font-size:11px;color:var(--muted);margin-bottom:12px">These categories have no budget set, so they are not deducted from any budget above.</p>';
     untracked.forEach(([cat, amt]) => {
       html += `<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid var(--border)"><span>${esc(cat)}</span><span>${fmt(amt)}</span></div>`;
     });
@@ -1453,26 +1510,29 @@ const CHAT_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'set_budget',
-      description: 'Set or update the monthly budget. Use when the user says "set a budget", "my budget is", "add a budget", "change my budget", or asks to set spending limits. This REPLACES the existing budget. Always include the total. Optionally include per-category spending limits.',
+      name: 'set_category_budget',
+      description: 'Set or update the monthly budget for ONE category. Use when the user says "set a budget", "add a budget", "budget X for Y", "my Transport budget is", or "change my Food budget". This is ADDITIVE — it adds or updates only the named category and NEVER touches the user\'s other category budgets. The overall total is automatically the sum of all category budgets, so do not ask for or set a separate total.',
       parameters: {
         type: 'object',
         properties: {
-          total: { type: 'number', description: 'Total monthly budget in Philippine Peso (positive number)' },
-          categories: {
-            type: 'array',
-            description: 'Optional per-category spending limits. Omit if the user only gave a total.',
-            items: {
-              type: 'object',
-              properties: {
-                category: { type: 'string', description: 'Expense category, e.g. Food & Dining, Transport, Utilities, Shopping, Entertainment, Healthcare, Rent / Housing, Education, Personal Care, Savings, Other' },
-                limit:    { type: 'number', description: 'Monthly limit for this category in Philippine Peso' }
-              },
-              required: ['category', 'limit']
-            }
-          }
+          category: { type: 'string', description: 'The single expense category this budget is for. Must be one of: Food & Dining, Transport, Utilities, Shopping, Entertainment, Healthcare, Rent / Housing, Education, Personal Care, Savings, Other. Map the user\'s words to the closest one (e.g. fuel/gas/commute => Transport, groceries => Food & Dining, electric/water/internet => Utilities).' },
+          amount:   { type: 'number', description: 'Monthly limit for this category in Philippine Peso (positive number)' }
         },
-        required: ['total']
+        required: ['category', 'amount']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_category_budget',
+      description: 'Remove the budget for ONE category (or clear all budgets). Use when the user says "remove the Transport budget", "delete my Food budget", or "clear my budgets". Other category budgets are kept unless clear_all is true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category:  { type: 'string', description: 'The category whose budget should be removed. Omit if clear_all is true.' },
+          clear_all: { type: 'boolean', description: 'Set true to remove every budget at once.' }
+        }
       }
     }
   }
@@ -1580,19 +1640,34 @@ async function executeTool(name, args) {
     }
   }
 
-  if (name === 'set_budget') {
-    const total = Math.abs(Number(args.total));
-    if (!total || isNaN(total)) return '⚠️ Please tell me a budget total amount.';
-    const cats = Array.isArray(args.categories)
-      ? args.categories
-          .filter(c => c && c.category && c.limit != null && !isNaN(Number(c.limit)))
-          .map(c => ({ name: c.category, amount: Math.abs(Number(c.limit)) }))
-      : [];
-    save('sw_budget', { total, categories: cats, updated: new Date().toISOString() });
-    const active = document.querySelector('.page.active')?.id;
-    if (active === 'page-budget')     renderBudget();
-    if (active === 'page-dashboard')  renderDashboard();
-    return `✅ Budget set: ${fmt(total)}/month${cats.length ? ' — limits: ' + cats.map(c => `${c.name} ${fmt(c.amount)}`).join(', ') : ''}`;
+  if (name === 'set_category_budget') {
+    const cat = matchCategory(args.category);
+    if (!cat) return `⚠️ "${args.category}" isn't a valid category. Choose one of: ${EXP_CATS.join(', ')}.`;
+    const amount = Math.abs(Number(args.amount));
+    if (!amount || isNaN(amount)) return '⚠️ Please tell me the budget amount for that category.';
+    const b = getBudget();
+    const cats = (b?.categories || []).filter(c => c.name !== cat); // drop any existing entry for this category
+    cats.push({ name: cat, amount });
+    cats.sort((a, c) => EXP_CATS.indexOf(a.name) - EXP_CATS.indexOf(c.name));
+    save('sw_budget', { total: cats.reduce((s, c) => s + c.amount, 0), categories: cats, updated: new Date().toISOString() });
+    refreshBudgetViews();
+    return `✅ ${cat} budget set to ${fmt(amount)}/month. Total budget is now ${fmt(budgetTotal(getBudget()))} across ${cats.length} categor${cats.length === 1 ? 'y' : 'ies'}.`;
+  }
+
+  if (name === 'remove_category_budget') {
+    const b = getBudget();
+    if (args.clear_all) {
+      save('sw_budget', null);
+      refreshBudgetViews();
+      return '✅ All budgets cleared.';
+    }
+    const cat = matchCategory(args.category);
+    if (!cat) return `⚠️ "${args.category}" isn't a valid category.`;
+    const cats = (b?.categories || []).filter(c => c.name !== cat);
+    if (cats.length === (b?.categories || []).length) return `ℹ️ There was no budget set for ${cat}.`;
+    save('sw_budget', cats.length ? { total: cats.reduce((s, c) => s + c.amount, 0), categories: cats, updated: new Date().toISOString() } : null);
+    refreshBudgetViews();
+    return `✅ Removed the ${cat} budget. ${cats.length ? `Total budget is now ${fmt(budgetTotal(getBudget()))}.` : 'No budgets remain.'}`;
   }
 
   return `⚠️ Unknown tool: ${name}`;
@@ -1850,7 +1925,12 @@ MONTH: ${thisMonth()}
 TOP EXPENSE CATEGORIES:
 ${topCats.map(([c, a]) => `- ${c}: ${fmt(a)}`).join('\n') || '- None yet'}
 
-${budget ? `MONTHLY BUDGET:\n- Total: ${fmt(budget.total)} (${(exp/budget.total*100).toFixed(1)}% used, ${fmt(budget.total-exp)} left)\n${(budget.categories||[]).map(c=>`- ${c.name}: ${fmt(byCat[c.name]||0)} / ${fmt(c.amount)}`).join('\n')}` : 'No budget set.'}
+${budget && budgetTotal(budget) > 0 ? (() => {
+  const bt = budgetTotal(budget);
+  const tracked = new Set((budget.categories||[]).map(c=>c.name));
+  const bspent = Object.entries(byCat).filter(([c])=>tracked.has(c)).reduce((s,[,a])=>s+a,0);
+  return `MONTHLY BUDGETS (one envelope per category; total is their sum):\n- Total: ${fmt(bt)} (${(bspent/bt*100).toFixed(1)}% used, ${fmt(bt-bspent)} left)\n${(budget.categories||[]).map(c=>`- ${c.name}: ${fmt(byCat[c.name]||0)} / ${fmt(c.amount)} (${fmt(c.amount-(byCat[c.name]||0))} left)`).join('\n')}`;
+})() : 'No budgets set.'}
 
 TRACKED PRODUCTS (${prods.length}) -- use the PID when calling delete_product:
 ${prods.slice(0,40).map(p=>`- [PID:${p.id}] ${p.name}: ${fmt(p.price)}${p.lazadaPrice!=null?` (Lazada: ${fmt(p.lazadaPrice)})`:''}`).join('\n')||'- None'}
@@ -1866,8 +1946,9 @@ TOOLS AVAILABLE:
 3. delete_transaction -- remove a transaction (use ID from list above)
 4. add_product -- save a product to catalog
 5. search_lazada -- real-time Lazada PH price search
-6. set_budget -- set or update the monthly budget (total, plus optional per-category limits)
-7. delete_product -- remove a product from the catalog (use the [PID:xxx] id, or delete_all:true for the whole catalog)
+6. set_category_budget -- set/update the budget for ONE category (additive; never wipes other categories)
+7. remove_category_budget -- remove one category's budget (or clear_all:true for all)
+8. delete_product -- remove a product from the catalog (use the [PID:xxx] id, or delete_all:true for the whole catalog)
 
 CRITICAL RULES:
 - "edit/change/update/fix/correct" a transaction => edit_transaction (NOT add_transaction)
@@ -1875,7 +1956,8 @@ CRITICAL RULES:
 - "delete/remove" a transaction => delete_transaction
 - "delete/remove a PRODUCT" or "clear the catalog" => delete_product (NEVER delete_transaction). Products and transactions are SEPARATE — deleting products must not touch transactions, and vice versa.
 - "delete all products" => delete_product with delete_all:true
-- "set/add/change a budget" or "my budget is X" or "limit X to Y" => set_budget
+- "set/add/change a budget", "my budget is X", "budget X for Y", "limit X to Y" => set_category_budget (one category at a time; call it once per category the user names)
+- "remove/delete the X budget" or "clear my budgets" => remove_category_budget
 - Always find the transaction ID from the list above before editing/deleting
 - If the user attaches an image of a receipt, analyze it and suggest logging it as an expense
 - Today is ${today()}
@@ -1884,10 +1966,10 @@ MONEY & MATH RULES (accuracy matters more than speed — follow these exactly):
 - NEVER invent, estimate, or round a financial figure. Use ONLY the numbers in the snapshot above or the exact numbers the user states.
 - Do not confuse these — they are different things:
   • Net balance = Income − Expenses. It is leftover money, NOT a budget and NOT income.
-  • Budget total = the spending cap the user chooses for the month. It is NOT income and NOT net balance.
-  • Budget remaining = Budget total − Expenses so far this month.
+  • A budget is per-category (an envelope). The user can set as many as they want. The overall budget total is simply the SUM of every category budget — there is no separate standalone total to ask for.
+  • Each category's remaining = that category's budget − spending in that SAME category this month. A category's spending only ever counts against its OWN budget, never another category's.
 - Allocations are SUBTRACTED from available money, never added. Example: ₱12,110 available − ₱8,000 set aside = ₱4,110 left. (Adding them, e.g. 12,110 + 8,000, is WRONG.)
-- When the user gives a category limit but no total budget, DO NOT make up a total. Ask: "What should your total monthly budget be?" — or confirm whether that amount IS the total before calling set_budget.
+- BUDGET RULES: Each category has at most ONE budget. When the user sets a budget for a category (e.g. "budget 4000 for fuel"), map it to the right category (fuel => Transport) and call set_category_budget for that ONE category only. NEVER overwrite or drop the user's other category budgets — set_category_budget is additive. Do NOT ask for a "total monthly budget"; the total is computed automatically. Spending in a category with no budget is "Other Spending" and is not deducted from any budget.
 - Whenever you do a calculation, show the formula with the actual numbers (e.g. "22,000 − 9,890 = 12,110") so the user can verify it. When summing a list, add the values one at a time and double-check the running total before stating it.
 
 RECEIPT RULES (when a "[RECEIPT SCAN ...]" block appears in the conversation):
